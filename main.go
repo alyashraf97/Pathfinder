@@ -27,19 +27,34 @@ var (
 var zipWriter *zip.Writer
 var archiveFile *os.File
 
-func init() {
-	flag.StringVar(&directory, "d", "", "Directory to search for files")
-	flag.StringVar(&listFile, "l", "", "Text file with file lists")
-	flag.StringVar(&outputPath, "p", ".", "Optional: Output path for the zip archive")
+func main() {
+	// Define flags at the global scope
+	var (
+		defaultListFile   = "pathfinder.txt"
+		defaultOutputPath = "."
+	)
+
+	// Use Pathfinder directory as default search directory
+	cwd, _ := os.Getwd()
+	defaultDirectory := filepath.Join(cwd, "Pathfinder")
+
+	flag.StringVar(&directory, "d", defaultDirectory, "Directory to search for files")
+	flag.StringVar(&listFile, "l", filepath.Join(".", defaultListFile), "Text file with file lists")
+	flag.StringVar(&outputPath, "p", defaultOutputPath, "Optional: Output path for the zip archive")
 	flag.StringVar(&outputName, "n", "", "Optional: Output archive name")
 	flag.BoolVar(&verbose, "v", false, "Enable verbose mode")
-}
 
-func main() {
 	flag.Parse()
 
-	if directory == "" || listFile == "" {
-		fmt.Println("Usage: pathfinder -d <directory> -l <text_file> [-p <output_path>] [-n <output_archive_name>] [-v]")
+	// Check if the specified directory exists
+	if _, err := os.Stat(directory); os.IsNotExist(err) {
+		fmt.Println("Error: The specified directory does not exist.")
+		os.Exit(1)
+	}
+
+	// Check if the specified list file exists
+	if _, err := os.Stat(listFile); os.IsNotExist(err) {
+		fmt.Println("Error: The specified list file does not exist.")
 		os.Exit(1)
 	}
 
