@@ -93,6 +93,7 @@ func readTextFile(filename string) {
 	scanner := bufio.NewScanner(file)
 
 	// Scan the file line by line
+	// Scan the file line by line
 	for scanner.Scan() {
 		line := scanner.Text()
 
@@ -100,6 +101,11 @@ func readTextFile(filename string) {
 		isSectionHeader := strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]")
 		if isSectionHeader {
 			section = line[1 : len(line)-1]
+			continue
+		}
+
+		// Ignore empty lines
+		if line == "" {
 			continue
 		}
 
