@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -49,28 +50,12 @@ func main() {
 	outputFilename := generateOutputFilename(outputName)
 	outputPathAndName := filepath.Join(outputPath, outputFilename)
 
-	var err error
-	zipWriter, archiveFile, err = createZipArchive(outputPathAndName)
-	if err != nil {
+	if err := createZipArchive(outputPathAndName); err != nil {
 		fmt.Println("Error creating zip archive:", err)
 		os.Exit(1)
 	}
-	defer func() {
-		if zipWriter != nil {
-			// Close the zip writer
-			err := zipWriter.Close()
-			if err != nil {
-				fmt.Println("Error closing zip writer:", err)
-			}
-		}
-		if archiveFile != nil {
-			// Close the archive file
-			err := archiveFile.Close()
-			if err != nil {
-				fmt.Println("Error closing archive file:", err)
-			}
-		}
-	}()
+
+	defer closeResources()
 
 	// Search for files in the specified directory
 	searchFiles(directory)
@@ -80,37 +65,43 @@ func main() {
 	}
 }
 
+// readTextFile reads a text file and categorizes lines into sections.
 func readTextFile(filename string) {
+	// Open the file
 	file, err := os.Open(filename)
 	if err != nil {
-		fmt.Println("Error opening text file:", err)
-		os.Exit(1)
+		log.Fatalf("Error opening text file: %v", err)
 	}
 	defer file.Close()
 
 	var section string
-
 	scanner := bufio.NewScanner(file)
+
+	// Scan the file line by line
 	for scanner.Scan() {
 		line := scanner.Text()
 
-		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
+		// Check if the line is a section header
+		isSectionHeader := strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]")
+		if isSectionHeader {
 			section = line[1 : len(line)-1]
-		} else {
-			switch section {
-			case "files":
-				fileNames = append(fileNames, line)
-			case "paths":
-				filePaths = append(filePaths, line)
-			case "directories":
-				directories = append(directories, line)
-			}
+			continue
+		}
+
+		// Categorize the line based on the current section
+		switch section {
+		case "files":
+			fileNames = append(fileNames, line)
+		case "paths":
+			filePaths = append(filePaths, line)
+		case "directories":
+			directories = append(directories, line)
 		}
 	}
 
+	// Check for errors during scanning
 	if err := scanner.Err(); err != nil {
-		fmt.Println("Error reading text file:", err)
-		os.Exit(1)
+		fmt.Printf("Error reading text file: %v", err)
 	}
 }
 
@@ -120,65 +111,76 @@ func searchFiles(dir string) {
 			return err
 		}
 
-		// Handle files by names
-		if !info.IsDir() && contains(info.Name(), fileNames) {
-			if verbose {
-				fmt.Printf("Found by name: %s\n", path)
-			}
-
-			// Add the file to the new zip archive
-			err := addToZipArchive(path)
-			if err != nil {
-				fmt.Println("Error adding file to archive:", err)
-			}
-		}
-
-		// Handle files by paths
-		if !info.IsDir() {
-			// Check if the path contains any specified paths
-			for _, specifiedPath := range filePaths {
-				if strings.HasPrefix(path, specifiedPath) {
-					if verbose {
-						fmt.Printf("Found by path: %s\n", path)
-					}
-
-					// Add the file to the new zip archive
-					err := addToZipArchive(path)
-					if err != nil {
-						fmt.Println("Error adding file to archive:", err)
-					}
-					break
-				}
-			}
-		}
-
-		// Handle directories
-		if info.IsDir() && isUnderDirectory(path, directories) {
-			if verbose {
-				fmt.Printf("Found under directory: %s\n", path)
-			}
-
-			// Add all files under the directory to the new zip archive
-			err := filepath.Walk(path, func(subPath string, subInfo os.FileInfo, subErr error) error {
-				if subErr != nil {
-					return subErr
-				}
-				if !subInfo.IsDir() {
-					// Add the file to the new zip archive
-					err := addToZipArchive(subPath)
-					if err != nil {
-						fmt.Println("Error adding file to archive:", err)
-					}
-				}
-				return nil
-			})
-			if err != nil {
-				fmt.Println("Error walking through directory:", err)
-			}
-		}
+		handleFileByNames(path, info)
+		handleFileByPaths(path, info)
+		handleDirectories(path, info)
 
 		return nil
 	})
+}
+
+func handleFileByNames(path string, info os.FileInfo) {
+	if !info.IsDir() && contains(info.Name(), fileNames) {
+		if verbose {
+			fmt.Printf("Found by name: %s\n", path)
+		}
+
+		// Add the file to the new zip archive
+		if err := addToZipArchive(path); err != nil {
+			fmt.Println("Error adding file to archive:", err)
+		}
+	}
+}
+
+func handleFileByPaths(path string, info os.FileInfo) {
+	if info.IsDir() {
+		return
+	}
+
+	// Check if the path contains any specified paths
+	for _, specifiedPath := range filePaths {
+		if strings.HasPrefix(path, specifiedPath) {
+			handleFoundPath(path)
+			break
+		}
+	}
+}
+
+func handleFoundPath(path string) {
+	if verbose {
+		fmt.Printf("Found by path: %s\n", path)
+	}
+
+	// Add the file to the new zip archive
+	if err := addToZipArchive(path); err != nil {
+		fmt.Println("Error adding file to archive:", err)
+	}
+}
+
+func handleDirectories(path string, info os.FileInfo) {
+	if info.IsDir() && isUnderDirectory(path, directories) {
+		if verbose {
+			fmt.Printf("Found under directory: %s\n", path)
+		}
+
+		// Add all files under the directory to the new zip archive
+		if err := filepath.Walk(path, addFilesToZip); err != nil {
+			fmt.Println("Error walking through directory:", err)
+		}
+	}
+}
+
+func addFilesToZip(subPath string, subInfo os.FileInfo, subErr error) error {
+	if subErr != nil {
+		return subErr
+	}
+	if !subInfo.IsDir() {
+		// Add the file to the new zip archive
+		if err := addToZipArchive(subPath); err != nil {
+			fmt.Println("Error adding file to archive:", err)
+		}
+	}
+	return nil
 }
 
 func generateOutputFilename(userProvidedName string) string {
@@ -206,16 +208,15 @@ func isUnderDirectory(filePath string, directories []string) bool {
 	return false
 }
 
-func createZipArchive(outputPathAndName string) (*zip.Writer, *os.File, error) {
+func createZipArchive(outputPathAndName string) error {
 	archiveFile, err := os.Create(outputPathAndName)
 	if err != nil {
-		return nil, nil, err
+		return err
 	}
 
 	// Create a new zip writer
-	zipWriter := zip.NewWriter(archiveFile)
-
-	return zipWriter, archiveFile, nil
+	zipWriter = zip.NewWriter(archiveFile)
+	return nil
 }
 
 func addToZipArchive(filePath string) error {
@@ -236,4 +237,21 @@ func addToZipArchive(filePath string) error {
 	}
 
 	return nil
+}
+
+func closeResources() {
+	if zipWriter != nil {
+		// Close the zip writer
+		err := zipWriter.Close()
+		if err != nil {
+			fmt.Println("Error closing zip writer:", err)
+		}
+	}
+	if archiveFile != nil {
+		// Close the archive file
+		err := archiveFile.Close()
+		if err != nil {
+			fmt.Println("Error closing archive file:", err)
+		}
+	}
 }
